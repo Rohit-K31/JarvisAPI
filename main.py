@@ -1,27 +1,59 @@
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel,  ValidationError
 from typing import List, Optional
 import uvicorn
 from fastapi.responses import HTMLResponse
 import asyncio
+import re
 from jarvis import  Pool
+
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
 class Node(BaseModel):
     hostname: Optional[str]
     memory: Optional[str]
-    cpu_cores: Optional[str]
+    cpu_cores: Optional[int]
     cpu_generation: Optional[str]
-    cpu_sockets: Optional[str]
+    cpu_sockets: Optional[int]
     host_ip: Optional[str]
     gpu_model: Optional[str]
     pool: Optional[str]
     cpu_model: Optional[str]
     
+    @classmethod
+    def parse_memory(cls, memory_str: str) -> int:
+        """Convert memory strings like '256GB', '256 Gb', '1TB' to integer GB"""
+        try:
+            # Regex to extract numeric value and unit
+            match = re.match(r'^\s*(\d+)\s*(TB|GB|T|G)?', memory_str, re.IGNORECASE)
+            if not match:
+                return 0
+            
+            value, unit = match.groups()
+            unit = unit.upper() if unit else 'GB'  # Default to GB
+            
+            if unit.startswith('T'):
+                return int(value) * 1024
+            return int(value)
+        except (ValueError, AttributeError):
+            return 0
+    
 
 nodes = []
+
+def safe_int(value, default=0):
+    try:
+        return int(value) if value else default
+    except (ValueError, TypeError):
+        return default
+
 def fetch_nodes_from_api(pools: List[str] = None):
     
     if not pools:
@@ -35,10 +67,10 @@ def fetch_nodes_from_api(pools: List[str] = None):
         for node in p.nodes:
             node_data = {
                 "gpu_model": node.gpu_model,
-                "cpu_cores": str(node.num_cores), 
+                "cpu_cores": safe_int(node.num_cores), 
                 "cpu_model": node.cpu,
                 "cpu_generation": node.cpu_model,
-                "cpu_sockets": str(node.num_cpu_sockets), 
+                "cpu_sockets": safe_int(node.num_cpu_sockets), 
                 "hostname": node.name,
                 "host_ip": node.host_ip,
                 "memory": node.memory,
@@ -51,7 +83,25 @@ def fetch_nodes_from_api(pools: List[str] = None):
 @app.on_event("startup")
 async def startup_event():
     global nodes
-    nodes = fetch_nodes_from_api()  # Initial fetch of all nodes
+    nodes.clear()
+    nodes_new = fetch_nodes_from_api()  # Initial fetch of all nodes
+    for item in nodes_new:
+        try:
+            # Create Node instance with validation
+            node = Node(
+                hostname=item.get("hostname", "unknown-host"),
+                memory=item.get("memory", "0GB"),
+                cpu_cores=item.get("cpu_cores", 0),
+                cpu_generation=item.get("cpu_generation", "N/A"),
+                cpu_sockets=item.get("cpu_sockets", 0),
+                host_ip=item.get("host_ip", "0.0.0.0"),
+                gpu_model=item.get("gpu_model"),
+                pool=item.get("pool", "default"),
+                cpu_model=item.get("cpu_model", "Unknown CPU")
+            )
+            nodes.append(node)
+        except ValidationError as e:
+            print(f"Skipping invalid node: {e}")
     
     asyncio.create_task(periodic_update())
 
@@ -60,20 +110,23 @@ async def periodic_update():
         await asyncio.sleep(3000)
         new_nodes = fetch_nodes_from_api()
         nodes.clear()
-        nodes = [
-            Node(
-                gpu_model=node.get("gpu_model"),
-                cpu_cores=node.get("cpu_cores"),
-                cpu_model=node["cpu_model"],
-                cpu_generation=node["cpu_generation"],
-                cpu_sockets=node["cpu_sockets"],
-                hostname=node["hostname"],
-                host_ip=node["host_ip"],
-                memory=node["memory"],
-                pool=node["pool"]
-            )
-            for node in new_nodes
-        ]
+        for item in new_nodes:
+            try:
+                # Create Node instance with validation
+                node = Node(
+                    hostname=item.get("hostname", "unknown-host"),
+                    memory=item.get("memory", "0GB"),
+                    cpu_cores=item.get("cpu_cores", 0),
+                    cpu_generation=item.get("cpu_generation", "N/A"),
+                    cpu_sockets=item.get("cpu_sockets", 0),
+                    host_ip=item.get("host_ip", "0.0.0.0"),
+                    gpu_model=item.get("gpu_model"),
+                    pool=item.get("pool", "default"),
+                    cpu_model=item.get("cpu_model", "Unknown CPU")
+                )
+                nodes.append(node)
+            except ValidationError as e:
+                print(f"Skipping invalid node: {e}")
 
 @app.get("/api/nodes", response_model=List[Node])
 async def get_nodes(
@@ -87,31 +140,29 @@ async def get_nodes(
     min_memory: int = None,
     pools: str = None  # Comma-separated pool names
 ):
+    logger.info(f"Received query: {locals()}")  # Log incoming parameters
     filtered = nodes
-    
+   
     # Text filters
-    if gpu_model:
-        filtered = [n for n in filtered if gpu_model.lower() in n.gpu_model.lower()]
-    if cpu_model:
-        filtered = [n for n in filtered if cpu_model.lower() in n.cpu_model.lower()]
-    if cpu_generation:
-        filtered = [n for n in filtered if cpu_generation.lower() in n.cpu_generation.lower()]
     if hostname:
         filtered = [n for n in filtered if hostname.lower() in n.hostname.lower()]
+    if min_memory:
+        filtered = [n for n in filtered if Node.parse_memory(n.memory) >= min_memory]
+    if min_cpu_cores:
+        filtered = [n for n in filtered if n.cpu_cores >= min_cpu_cores]
+    if cpu_generation:
+        filtered = [n for n in filtered if cpu_generation.lower() in n.cpu_generation.lower()]
+    if cpu_sockets:
+        filtered = [n for n in filtered if n.cpu_sockets == cpu_sockets]
     if host_ip:
         filtered = [n for n in filtered if host_ip in n.host_ip]
-
-    if min_cpu_cores:
-        filtered = [n for n in filtered if n.cpu_cores  and int(n.cpu_cores) >= min_cpu_cores]
-    if cpu_sockets:
-        filtered = [n for n in filtered if n.cpu_sockets  and int(n.cpu_sockets) == cpu_sockets]
-    if min_memory:
-        filtered = [n for n in filtered if n.memory and int(n.memory.replace("GB", "")) >= min_memory]
-
-   
+    if gpu_model:
+        filtered = [n for n in filtered if n.gpu_model and gpu_model.lower() in n.gpu_model.lower()]
     if pools:
         pool_list = [p.strip().lower() for p in pools.split(",")]
         filtered = [n for n in filtered if n.pool.lower() in pool_list]
+    if cpu_model:
+        filtered = [n for n in filtered if cpu_model.lower() in n.cpu_model.lower()]
     
     return filtered
 

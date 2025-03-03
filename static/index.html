@@ -6,9 +6,61 @@
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             padding: 20px;
-            max-width: 1400px;
+            max-width: 1600px;
             margin: 0 auto;
             background: #f8f9fa;
+        }
+        .table-container {
+            overflow-x: auto;
+            max-width: 100%;
+            margin: 20px 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            overflow: hidden;
+            table-layout: auto;
+            min-width: 1000px;  /* Increased min-width */
+        }
+        th {
+            background: #007bff;
+            color: white;
+            padding: 15px;
+            text-align: left;
+            font-weight: 500;
+            position: sticky;
+            top: 0;
+            white-space: nowrap;
+        }
+        td {
+            padding: 12px;
+            word-break: break-word;
+            vertical-align: top;
+        }
+        /* Hostname Column Specific Style */
+        td.hostname-col {
+            white-space: nowrap;  /* Prevent line breaks */
+            max-width: 250px;     /* Fixed width for hostname */
+            overflow: hidden;
+            text-overflow: ellipsis;  /* Add ellipsis for long hostnames */
+        }
+        /* IP Column Specific Style */
+        td.ip-col {
+            white-space: nowrap;  /* Prevent line breaks */
+            max-width: 180px;     /* Fixed width for IP */
+        }
+        /* GPU Column */
+        td.gpu-col {
+            max-width: 300px;
+        }
+        /* Pool Column */
+        td.pool-col {
+            max-width: 150px;
+        }
+        tr:hover {
+            background: #f1f1f1;
         }
         .query-form {
             background: white;
@@ -21,9 +73,6 @@
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 15px;
-        }
-        .query-grid div {
-            margin: 0;
         }
         input[type="text"],
         input[type="number"] {
@@ -46,42 +95,6 @@
         button:hover {
             background: #0056b3;
         }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            border-radius: 8px;
-            overflow: hidden;
-            table-layout: fixed;
-        }
-        th {
-            background: #007bff;
-            color: white;
-            padding: 15px;
-            text-align: left;
-            font-weight: 500;
-        }
-        td {
-            padding: 12px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        tr:hover {
-            background: #f1f1f1;
-        }
-        .gpu-col {
-            max-width: 250px;
-        }
-        .memory-col {
-            width: 120px;
-        }
-        .socket-col {
-            width: 100px;
-        }
-        .pool-col {
-            width: 150px;
-        }
         .status-message {
             margin: 20px 0;
             padding: 15px;
@@ -94,11 +107,12 @@
             .query-grid {
                 grid-template-columns: 1fr;
             }
+            .table-container {
+                margin: 10px -20px;
+            }
             table {
                 font-size: 12px;
-            }
-            th, td {
-                padding: 10px;
+                min-width: 800px;
             }
         }
     </style>
@@ -108,6 +122,7 @@
     
     <div class="query-form">
         <div class="query-grid">
+            <!-- Ensure each label wraps the input -->
             <div><label>Hostname: <input type="text" id="hostname"></label></div>
             <div><label>Minimum Memory (GB): <input type="number" id="minMemory" min="0"></label></div>
             <div><label>Minimum CPU Cores: <input type="number" id="minCpuCores" min="0"></label></div>
@@ -115,7 +130,7 @@
             <div><label>CPU Sockets: <input type="number" id="cpuSockets" min="0"></label></div>
             <div><label>Host IP: <input type="text" id="hostIp"></label></div>
             <div><label>GPU Model: <input type="text" id="gpuModel"></label></div>
-            <div><label>Pools: <input type="text" id="pools" placeholder="gpu-cluster,hpc"></label></div>
+            <div><label>Pools: <input type="text" id="pools"></label></div>
             <div><label>CPU Model: <input type="text" id="cpuModel"></label></div>
         </div>
         <div style="text-align: right; margin-top: 15px;">
@@ -125,87 +140,79 @@
     </div>
 
     <div class="status-message" id="statusMessage"></div>
-
-    <table id="results">
-        <thead>
-            <tr>
-                <th>Hostname</th>
-                <th class="memory-col">Memory</th>
-                <th class="socket-col">CPU Cores</th>
-                <th>CPU Generation</th>
-                <th class="socket-col">Sockets</th>
-                <th>Host IP</th>
-                <th class="gpu-col">GPU Model</th>
-                <th class="pool-col">Pool</th>
-                <th>CPU Model</th>
-            </tr>
-        </thead>
-        <tbody>
-        </tbody>
-    </table>
+    <div class="table-container">
+        <table id="results">
+            <thead>
+                <tr>
+                    <th>Hostname</th>
+                    <th>Memory</th>
+                    <th>CPU Cores</th>
+                    <th>CPU Generation</th>
+                    <th>Sockets</th>
+                    <th>Host IP</th>
+                    <th>GPU Model</th>
+                    <th>Pool</th>
+                    <th>CPU Model</th>
+                </tr>
+            </thead>
+            <tbody>
+            </tbody>
+        </table>
+    </div>
 
     <script>
-        let originalNodes = [];
-
-        async function fetchOriginalNodes() {
-            const response = await fetch('/api/nodes');
-            originalNodes = await response.json();
-        }
-
         async function queryNodes() {
             const statusMessage = document.getElementById('statusMessage');
             statusMessage.style.display = 'none';
 
+            // Collect filters
             const params = new URLSearchParams();
+            const activeFilters = [];
             const filters = [
-                'hostname', 'minMemory', 'minCpuCores',
-                'cpuGeneration', 'cpuSockets', 'hostIp',
-                'gpuModel', 'pools', 'cpuModel'
+                { key: 'hostname', id: 'hostname' },
+                { key: 'min_memory', id: 'minMemory' },
+                { key: 'min_cpu_cores', id: 'minCpuCores' },
+                { key: 'cpu_generation', id: 'cpuGeneration' },
+                { key: 'cpu_sockets', id: 'cpuSockets' },
+                { key: 'host_ip', id: 'hostIp' },
+                { key: 'gpu_model', id: 'gpuModel' },
+                { key: 'pools', id: 'pools' },
+                { key: 'cpu_model', id: 'cpuModel' }
             ];
+
+            // Debugging: Log each filter value
+            filters.forEach(({ key, id }) => {
+                const element = document.getElementById(id);
+                if (!element) return;
+
+                const value = element.value.trim();
+                console.log(`Filter ${key}:`, value); // Log each filter value
+
+                if (value) {
+                    params.append(key, value);
+
+                    // Safely get label text
+                    const labelText = element.parentElement?.textContent?.split(":")[0]?.trim() || key;
+                    activeFilters.push(`${labelText}: ${value}`);
+                }
+            });
+
+            console.log("Final query string:", params.toString());
 
             // Show loading state
             const tableBody = document.querySelector('#results tbody');
             tableBody.innerHTML = '<tr><td colspan="9" style="text-align: center;">Loading...</td></tr>';
 
-            // Collect filters
-            const activeFilters = [];
-            filters.forEach(filter => {
-                const element = document.getElementById(filter);
-                const value = element.value.trim();
-                if (value) {
-                    params.append(filter.replace(/([A-Z])/g, '_$1').toLowerCase(), value);
-                    activeFilters.push(`${element.previousElementSibling.textContent}: ${value}`);
-                }
-            });
-
-            // Fetch data
-            const response = await fetch(`/api/nodes?${params.toString()}`);
-            const data = await response.json();
-
-            // Update table
-            tableBody.innerHTML = '';
-            if (data.length === 0) {
-                statusMessage.textContent = 'No nodes found matching the criteria';
+            try {
+                const response = await fetch(`/api/nodes?${params.toString()}`);
+                if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+                const data = await response.json();
+                populateTable(data);
+            } catch (error) {
+                console.error("Request failed:", error);
+                statusMessage.textContent = 'Error fetching data. Check console for details.';
                 statusMessage.style.display = 'block';
-            } else {
-                data.forEach(node => {
-                    const row = `
-                        <tr>
-                            <td>${node.hostname}</td>
-                            <td class="memory-col">${node.memory}</td>
-                            <td class="socket-col">${node.cpu_cores}</td>
-                            <td>${node.cpu_generation}</td>
-                            <td class="socket-col">${node.cpu_sockets}</td>
-                            <td>${node.host_ip}</td>
-                            <td class="gpu-col" title="${node.gpu_model || '-'}">
-                                ${node.gpu_model ? node.gpu_model.slice(0, 25) + (node.gpu_model.length > 25 ? '...' : '') : '-'}
-                            </td>
-                            <td class="pool-col">${node.pool}</td>
-                            <td>${node.cpu_model}</td>
-                        </tr>
-                    `;
-                    tableBody.innerHTML += row;
-                });
+                tableBody.innerHTML = '';
             }
 
             // Show active filters
@@ -220,37 +227,28 @@
         }
 
         function resetFilters() {
-            // Clear all inputs
             document.querySelectorAll('.query-grid input').forEach(input => input.value = '');
-            
-            // Reload original data
-            if (originalNodes.length === 0) {
-                fetchOriginalNodes().then(() => {
-                    populateTable(originalNodes);
-                    document.getElementById('statusMessage').style.display = 'none';
-                });
-            } else {
-                populateTable(originalNodes);
-                document.getElementById('statusMessage').style.display = 'none';
-            }
+            populateTable([]);
         }
 
         function populateTable(data) {
             const tableBody = document.querySelector('#results tbody');
             tableBody.innerHTML = '';
+            if (data.length === 0) {
+                tableBody.innerHTML = '<tr><td colspan="9" style="text-align: center;">No nodes found.</td></tr>';
+                return;
+            }
             data.forEach(node => {
                 const row = `
                     <tr>
                         <td>${node.hostname}</td>
-                        <td class="memory-col">${node.memory}</td>
-                        <td class="socket-col">${node.cpu_cores}</td>
+                        <td>${node.memory}</td>
+                        <td>${node.cpu_cores}</td>
                         <td>${node.cpu_generation}</td>
-                        <td class="socket-col">${node.cpu_sockets}</td>
+                        <td>${node.cpu_sockets}</td>
                         <td>${node.host_ip}</td>
-                        <td class="gpu-col" title="${node.gpu_model || '-'}">
-                            ${node.gpu_model ? node.gpu_model.slice(0, 25) + (node.gpu_model.length > 25 ? '...' : '') : '-'}
-                        </td>
-                        <td class="pool-col">${node.pool}</td>
+                        <td>${node.gpu_model || '-'}</td>
+                        <td>${node.pool}</td>
                         <td>${node.cpu_model}</td>
                     </tr>
                 `;
@@ -259,7 +257,7 @@
         }
 
         // Initial load
-        fetchOriginalNodes().then(() => populateTable(originalNodes));
+        populateTable([]);
     </script>
 </body>
 </html>
