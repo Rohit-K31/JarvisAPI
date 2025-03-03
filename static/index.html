@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Node Query</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .query-form { margin-bottom: 30px; }
+        .query-form div { margin: 10px 0; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; text-align: left; border: 1px solid #ddd; }
+        th { background-color: #f5f5f5; }
+    </style>
+</head>
+<body>
+    <h1>Node Query Interface</h1>
+    <div class="query-form">
+        <div>
+            <label>Hostname: <input type="text" id="hostname"></label>
+        </div>
+        <div>
+            <label>Minimum Memory (GB): <input type="number" id="minMemory"></label>
+        </div>
+        <div>
+            <label>Minimum CPU Cores: <input type="number" id="minCpuCores"></label>
+        </div>
+        <div>
+            <label>CPU Generation: <input type="text" id="cpuGeneration"></label>
+        </div>
+        <div>
+            <label>CPU Sockets: <input type="number" id="cpuSockets"></label>
+        </div>
+        <div>
+            <label>Host IP: <input type="text" id="hostIp"></label>
+        </div>
+        <div>
+            <label>GPU Model: <input type="text" id="gpuModel"></label>
+        </div>
+        <div>
+            <label>Pools (comma-separated): 
+                <input type="text" id="pools">
+            </label>
+        </div>
+        <div>
+            <label>CPU Model: <input type="text" id="cpuModel"></label>
+        </div>
+        <button onclick="queryNodes()">Search</button>
+    </div>
+    
+    <table id="results">
+        <thead>
+            <tr>
+                <th>Hostname</th>
+                <th>Memory</th>
+                <th>CPU Cores</th>
+                <th>CPU Generation</th>
+                <th>CPU Sockets</th>
+                <th>Host IP</th>
+                <th>GPU Model</th>
+                <th>Pool</th>
+                <th>CPU Model</th>
+            </tr>
+        </thead>
+        <tbody>
+        </tbody>
+    </table>
+
+    <script>
+        async function queryNodes() {
+            const filters = [
+                'hostname', 'minMemory', 'minCpuCores',
+                'cpuGeneration', 'cpuSockets', 'hostIp',
+                'gpuModel', 'pools', 'cpuModel'
+            ];
+
+            const params = new URLSearchParams();
+            filters.forEach(filter => {
+                const value = document.getElementById(filter).value;
+                if (value) params.append(filter.replace(/([A-Z])/g, '_$1').toLowerCase(), value);
+            });
+
+            const response = await fetch(`/api/nodes?${params.toString()}`);
+            const data = await response.json();
+
+            const tbody = document.querySelector('#results tbody');
+            tbody.innerHTML = '';
+
+            data.forEach(node => {
+                const row = `
+                    <tr>
+                        <td>${node.hostname}</td>
+                        <td>${node.memory}</td>
+                        <td>${node.cpu_cores}</td>
+                        <td>${node.cpu_generation}</td>
+                        <td>${node.cpu_sockets}</td>
+                        <td>${node.host_ip}</td>
+                        <td>${node.gpu_model || '-'}</td>
+                        <td>${node.pool}</td>
+                        <td>${node.cpu_model}</td>
+                    </tr>
+                `;
+                tbody.innerHTML += row;
+            });
+        }
+    </script>
+</body>
+</html>
