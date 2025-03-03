@@ -35,10 +35,10 @@ def fetch_nodes_from_api(pools: List[str] = None):
         for node in p.nodes:
             node_data = {
                 "gpu_model": node.gpu_model,
-                "cpu_cores": str(node.num_cores),  # Will be converted to int
+                "cpu_cores": str(node.num_cores), 
                 "cpu_model": node.cpu,
                 "cpu_generation": node.cpu_model,
-                "cpu_sockets": str(node.num_cpu_sockets),  # Will be converted to int
+                "cpu_sockets": str(node.num_cpu_sockets), 
                 "hostname": node.name,
                 "host_ip": node.host_ip,
                 "memory": node.memory,
@@ -101,7 +101,6 @@ async def get_nodes(
     if host_ip:
         filtered = [n for n in filtered if host_ip in n.host_ip]
 
-    # Numeric filters
     if min_cpu_cores:
         filtered = [n for n in filtered if n.cpu_cores  and int(n.cpu_cores) >= min_cpu_cores]
     if cpu_sockets:
@@ -109,11 +108,11 @@ async def get_nodes(
     if min_memory:
         filtered = [n for n in filtered if n.memory and int(n.memory.replace("GB", "")) >= min_memory]
 
-    # Pool filter (multiple possible)
+   
     if pools:
         pool_list = [p.strip().lower() for p in pools.split(",")]
         filtered = [n for n in filtered if n.pool.lower() in pool_list]
-    # print(filtered)
+    
     return filtered
 
 
