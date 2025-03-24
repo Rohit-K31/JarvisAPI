@@ -5,8 +5,10 @@ from typing import List, Optional
 import uvicorn
 from fastapi.responses import HTMLResponse
 import asyncio
+import asyncssh
 import re
 from jarvis import  Pool
+from ping3 import ping
 
 import logging
 
@@ -44,7 +46,7 @@ class Node(BaseModel):
             return int(value)
         except (ValueError, AttributeError):
             return 0
-    
+
 
 nodes = []
 
@@ -57,7 +59,7 @@ def safe_int(value, default=0):
 def fetch_nodes_from_api(pools: List[str] = None):
     
     if not pools:
-        pools = ['ahv-host-shared', 'ahv-host-shared-gpu', 'ahv-ipv6', 'ahv-maximum', 'apc-pool', 'ahv-g8-pool', 'ahv-g9-pool', '8Tb-pool']
+        pools = ['ahv-host-shared', 'ahv-host-shared-gpu', 'ahv-ipv6', 'ahv-maximum', 'apc-pool', 'ahv-g8-pool', 'ahv-g9-pool', '8Tb-pool', 'AHV-AMD']
         #pools = ['ahv-ipv6']
     
     res = []
@@ -68,7 +70,7 @@ def fetch_nodes_from_api(pools: List[str] = None):
             node_data = {
                 "gpu_model": node.gpu_model,
                 "cpu_cores": safe_int(node.num_cores), 
-                "cpu_model": node.cpu,
+                "cpu_model": classify_cpu(node.cpu),
                 "cpu_generation": node.cpu_model,
                 "cpu_sockets": safe_int(node.num_cpu_sockets), 
                 "hostname": node.name,
@@ -77,6 +79,8 @@ def fetch_nodes_from_api(pools: List[str] = None):
                 "pool": p.name
             }
             res.append(node_data)
+            
+        # print(set(list(node.cpu for node in p.nodes)))
     
     return res
     
@@ -129,42 +133,141 @@ async def periodic_update():
                 print(f"Skipping invalid node: {e}")
 
 @app.get("/api/nodes", response_model=List[Node])
-async def get_nodes(
-    gpu_model: str = None,
-    min_cpu_cores: int = None,
-    cpu_model: str = None,
-    cpu_generation: str = None,
-    cpu_sockets: int = None,
-    hostname: str = None,
-    host_ip: str = None,
-    min_memory: int = None,
-    pools: str = None  # Comma-separated pool names
-):
-    logger.info(f"Received query: {locals()}")  # Log incoming parameters
-    filtered = nodes
-   
-    # Text filters
-    if hostname:
-        filtered = [n for n in filtered if hostname.lower() in n.hostname.lower()]
-    if min_memory:
-        filtered = [n for n in filtered if Node.parse_memory(n.memory) >= min_memory]
-    if min_cpu_cores:
-        filtered = [n for n in filtered if n.cpu_cores >= min_cpu_cores]
-    if cpu_generation:
-        filtered = [n for n in filtered if cpu_generation.lower() in n.cpu_generation.lower()]
-    if cpu_sockets:
-        filtered = [n for n in filtered if n.cpu_sockets == cpu_sockets]
-    if host_ip:
-        filtered = [n for n in filtered if host_ip in n.host_ip]
-    if gpu_model:
-        filtered = [n for n in filtered if n.gpu_model and gpu_model.lower() in n.gpu_model.lower()]
-    if pools:
-        pool_list = [p.strip().lower() for p in pools.split(",")]
-        filtered = [n for n in filtered if n.pool.lower() in pool_list]
-    if cpu_model:
-        filtered = [n for n in filtered if cpu_model.lower() in n.cpu_model.lower()]
+async def get_nodes(gpu_model: str = None, min_cpu_cores: int = None,
+        cpu_model: str = None, cpu_generation: str = None, cpu_sockets: int = None,
+        hostname: str = None, host_ip: str = None, min_memory: int = None,
+        pools: str = None):
+        
+        logger.info(f"Received query: {locals()}")  # Log incoming parameters
+        filtered = nodes
     
-    return filtered
+        # Text filters
+        if hostname:
+            filtered = [n for n in filtered if hostname.lower() in n.hostname.lower()]
+        if min_memory:
+            filtered = [n for n in filtered if Node.parse_memory(n.memory) >= min_memory]
+        if min_cpu_cores:
+            filtered = [n for n in filtered if n.cpu_cores >= min_cpu_cores]
+        if cpu_generation:
+            filtered = [n for n in filtered if cpu_generation.lower() in n.cpu_generation.lower()]
+        if cpu_sockets:
+            filtered = [n for n in filtered if n.cpu_sockets == cpu_sockets]
+        if host_ip:
+            filtered = [n for n in filtered if host_ip in n.host_ip]
+        if gpu_model:
+            filtered = [n for n in filtered if n.gpu_model and gpu_model.lower() in n.gpu_model.lower()]
+        if pools:
+            pool_list = [p.strip().lower() for p in pools.split(",")]
+            filtered = [n for n in filtered if n.pool.lower() in pool_list]
+        if cpu_model:
+            filtered = [n for n in filtered if cpu_model.lower() in n.cpu_model.lower()]
+        
+        return filtered
+    
+
+
+
+
+def classify_cpu(cpu_name):
+    cpu_name_ = cpu_name
+    cpu_name = cpu_name.strip()
+    if not cpu_name:
+        return cpu_name
+
+    if cpu_name.startswith('Intel'):
+        try:
+            after_xeon = cpu_name.split('Xeon(R) ')[1]
+            parts = after_xeon.split()
+            brand = parts[0] if parts else ''
+
+            # Handle Scalable Processors (Skylake and newer)
+            if brand in ['Gold', 'Silver', 'Platinum']:
+                model_part = parts[1] if len(parts) > 1 else ''
+                numeric_model = ''.join(c for c in model_part if c.isdigit())
+                if len(numeric_model) < 2:
+                    return f"Unknown: ({cpu_name_})"
+                key = numeric_model[:2]
+                intel_generations = {
+                    '53': 'Cooper Lake (3rd Gen)',  # Added for 53xx models
+                    '54': 'Cooper Lake (3rd Gen)', 
+                    '61': 'Skylake (1st Gen Scalable)',
+                    '62': 'Cascade Lake (2nd Gen)',
+                    '63': 'Cooper Lake (3rd Gen)',
+                    '64': 'Ice Lake (4th Gen)',
+                    '83': 'Ice Lake (4th Gen)',
+                    '43': 'Ice Lake (4th Gen)',
+                    '65': 'Sapphire Rapids (5th Gen)',
+                    '84': 'Sapphire Rapids (5th Gen)',
+                    '85': 'Sapphire Rapids (5th Gen)',
+                    '66': 'Emerald Rapids (6th Gen)',  # Newer generation
+                    '86': 'Emerald Rapids (6th Gen)',  # Assume future model numbers
+                }
+                generation = intel_generations.get(key, f'{cpu_name_}')
+                if generation.startswith('Intel'):
+                    return generation
+                return f"Intel {generation}"
+
+            # Handle Older Xeon E5/E7 (Haswell, Broadwell, etc.)
+            elif brand == 'CPU':
+                model_part = parts[1] if len(parts) > 1 else ''
+                version = None
+                for part in parts:
+                    if part.startswith('v') and part[1:].isdigit():
+                        version = part
+                        break
+                if version:
+                    version_map = {
+                        'v2': 'Ivy Bridge-EP (2nd Gen Xeon)',
+                        'v3': 'Haswell-EP (3rd Gen Xeon)',
+                        'v4': 'Broadwell-EP (4th Gen Xeon)',
+                    }
+                    generation = version_map.get(version, f'{cpu_name_}')
+                    return f"Intel Xeon {version} ({generation})"
+                else:
+                    return f"Intel Xeon (Pre-Scalable, Unknown Gen)"
+
+            else:
+                return f"{cpu_name_}"
+
+        except (IndexError, ValueError):
+            return f"{cpu_name_}"
+
+    elif cpu_name.startswith('AMD'):
+        try:
+            parts = cpu_name.split()
+            model = None
+            for part in parts:
+                if len(part) >= 4 and part[:4].isdigit():
+                    model_part = part
+                    model = part[:4]  # Extract first 4 digits (e.g., "7702P" → "7702")
+                    break
+            if not model:
+                return f"{cpu_name_}"
+            if model.startswith('7'):
+                gen_digit = model[3]
+                generation_map = {
+                    '1': 'Naples (1st Gen)',
+                    '2': 'Rome (2nd Gen)',
+                    '3': 'Milan (3rd Gen)',
+                }
+                generation = generation_map.get(gen_digit, 'Unknown')
+                return f"AMD EPYC {generation}"
+            elif model.startswith('9'):
+                gen_digit = model[3]
+                generation_map = {
+                    '4': 'Genoa (4th Gen)',
+                    '5': 'Bergamo (5th Gen)',
+                    '6': 'Genoa-X (6th Gen)',  # Future-proofing
+                }
+                generation = generation_map.get(gen_digit, 'Unknown')
+                return f"AMD EPYC {generation}"
+            else:
+                return f"{cpu_name_}"
+        except (IndexError, ValueError):
+            return f"{cpu_name_}"
+
+    else:
+        return f"{cpu_name_}"
 
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
