@@ -18,6 +18,7 @@ UPDATE_INTERVAL = config("UPDATE_INTERVAL", default=300, cast=int)
 SSH_USERNAME = config("SSH_USERNAME", default="root")
 SSH_PASSWORD = config("SSH_PASSWORD", default="RDMCluster.123")  # Password from environment
 
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -76,15 +77,18 @@ async def fetch_nodes_from_api(pools: List[str] = None):
         p = Pool.from_name(pool)
        # print(p.name)
         for node in p.nodes:
-            nic_data =  await  get_nic_info(node.host_ip)
+            hardware_data =  await  get_hardware_info(node.host_ip)
             # print(node.name)
-            logger.info(f"NIC Data: {nic_data}")
-            nics_count  = nic_data.get("nics_count", 0)
-            nic_speed = nic_data.get("nic_speed",0)
+            logger.info(f"NIC Data: {hardware_data}")
+            nics_count  = hardware_data.get("nics_count", 0)
+            nic_speed = hardware_data.get("nic_speed",0)
+            gpu_model = hardware_data.get("gpu_model", "")
+            if gpu_model=="":
+                gpu_model = node.gpu_model
             # print("nc = %s, ns = %s" % (nics_count, nic_speed))
             # continue
             node_data = {
-                "gpu_model": node.gpu_model,
+                "gpu_model": gpu_model,
                 "cpu_cores": safe_int(node.num_cores), 
                 "cpu_model": classify_cpu(node.cpu),
                 "cpu_generation": node.cpu_model,
@@ -186,7 +190,7 @@ async def get_nodes(gpu_model: str = None, min_cpu_cores: int = None,
         return filtered
     
 
-async def get_nic_info(ip: str) -> dict:
+async def get_hardware_info(ip: str) -> dict:
     if not ping(ip):
         logger.warning(f"Host {ip} unreachable")
         return {}
@@ -198,7 +202,7 @@ async def get_nic_info(ip: str) -> dict:
             password=SSH_PASSWORD,
             known_hosts=None
         ) as conn:
-            # Get NIC count
+             # Get NIC count
             result = await conn.run("lspci | grep -ci 'ethernet'")
             nics_count = int(result.stdout.strip()) if result.exit_status == 0 else None
 
@@ -213,21 +217,34 @@ async def get_nic_info(ip: str) -> dict:
                 speeds = [line.split(": ")[-1].strip() for line in result.stdout.splitlines() if "Speed" in line]
                 nic_speed = ", ".join(speeds) if speeds else None
 
-            return {"nics_count": nics_count, "nic_speed": nic_speed}
+            # Get GPU model (NVIDIA/AMD)
+            result = await conn.run("nvidia-smi --query-gpu=name --format=csv,noheader")
+            if result.exit_status == 0:
+                gpu_model = result.stdout.strip()
+            else:
+                # Fallback for AMD or other GPUs
+                result = await conn.run("lspci | grep -i 'vga\|amd\|nvidia'")
+                gpu_model = result.stdout.strip() if result.exit_status == 0 else None
+
+            return {
+                "nics_count": nics_count,
+                "nic_speed": nic_speed,
+                "gpu_model": gpu_model
+            }
 
     except asyncssh.misc.PermissionDenied:
         logger.error(f"Authentication failed for {ip}")
         #return {}
-        return {"nics_count": 0, "nic_speed": 0}
+        return {"nics_count": 0, "nic_speed": 0, "gpu_model":""}
     except Exception as e:
         logger.error(f"SSH failed for {ip}: {e}")
         # return {}
-        return {"nics_count": 0, "nic_speed": 0}
+        return {"nics_count": 0, "nic_speed": 0, "gpu_model":""}
     
     
-async def enrich_node_data(base_node: dict) -> Node:
-    nic_data = await get_nic_info(base_node["host_ip"])
-    return Node(**base_node, **nic_data)
+# async def enrich_node_data(base_node: dict) -> Node:
+#     nic_data = await get_nic_info(base_node["host_ip"])
+#     return Node(**base_node, **nic_data)
 
 
 def classify_cpu(cpu_name):
@@ -250,14 +267,14 @@ def classify_cpu(cpu_name):
                     return f"Unknown: ({cpu_name_})"
                 key = numeric_model[:2]
                 intel_generations = {
-                    '53': 'Cooper Lake', #(3rd Gen)',  # Added for 53xx models
-                    '54': 'Cooper Lake', # (3rd Gen)', 
+                    '53': 'CooperLake', #(3rd Gen)',  # Added for 53xx models
+                    '54': 'CooperLake', # (3rd Gen)', 
                     '61': 'Skylake', # (1st Gen Scalable)',
-                    '62': 'Cascade Lake', # (2nd Gen)',
-                    '63': 'Cooper Lake', # (3rd Gen)',
-                    '64': 'Ice Lake', # (4th Gen)',
-                    '83': 'Ice Lake', # (4th Gen)',
-                    '43': 'Ice Lake', # (4th Gen)',
+                    '62': 'CascadeLake', # (2nd Gen)',
+                    '63': 'CooperLake', # (3rd Gen)',
+                    '64': 'IceLake', # (4th Gen)',
+                    '83': 'IceLake', # (4th Gen)',
+                    '43': 'IceLake', # (4th Gen)',
                     '65': 'Sapphire Rapids', # (5th Gen)',
                     '84': 'Sapphire Rapids', # (5th Gen)',
                     '85': 'Sapphire Rapids', # (5th Gen)',
