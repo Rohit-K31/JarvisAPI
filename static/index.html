@@ -39,6 +39,10 @@
             word-break: break-word;
             vertical-align: top;
         }
+        .nic-col {
+            text-align: right;
+            padding-right: 20px;
+        }
         /* Hostname Column Specific Style */
         td.hostname-col {
             white-space: nowrap;  /* Prevent line breaks */
@@ -153,6 +157,8 @@
                     <th>GPU Model</th>
                     <th>Pool</th>
                     <th>CPU Model</th>
+                    <th class="nic-col">NIC Count</th>
+                    <th class="nic-col">NIC Speed</th>
                 </tr>
             </thead>
             <tbody>
@@ -250,6 +256,8 @@
                         <td>${node.gpu_model || '-'}</td>
                         <td>${node.pool}</td>
                         <td>${node.cpu_model}</td>
+                        <td class="nic-col">${node.nics_count || '-'}</td>
+                        <td class="nic-col">${node.nic_speed || '-'}</td>
                     </tr>
                 `;
                 tableBody.innerHTML += row;
