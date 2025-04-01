@@ -9,8 +9,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Create cache directory
+RUN mkdir -p /app/cache && chmod 777 /app/cache
+
 COPY main.py .
 COPY static ./static
 COPY jarvis.py .
 
 CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "main:app", "--bind", "0.0.0.0:80"]
+

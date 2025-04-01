@@ -11,13 +11,16 @@ import asyncio
 from decouple import config
 import re
 from jarvis import  Pool
+import os
+import json
+import time
 
 import logging
 
-UPDATE_INTERVAL = config("UPDATE_INTERVAL", default=300, cast=int)
+UPDATE_INTERVAL = config("UPDATE_INTERVAL", default=1500000, cast=int)
 SSH_USERNAME = config("SSH_USERNAME", default="root")
 SSH_PASSWORD = config("SSH_PASSWORD", default="RDMCluster.123")  # Password from environment
-
+CACHE_DIR = "/app/cache"
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -68,9 +71,9 @@ def safe_int(value, default=0):
 async def fetch_nodes_from_api(pools: List[str] = None):
     
     if not pools:
-        # pools = ['ahv-host-shared', 'ahv-host-shared-gpu', 'ahv-ipv6', 'ahv-maximum', 'apc-pool', 'ahv-g8-pool', 'ahv-g9-pool', '8Tb-pool', 'AHV-AMD']
-        # pools = ['apc-pool']
-        pools = ['ahv-host-shared-gpu']
+        pools = ['ahv-host-shared', 'ahv-host-shared-gpu', 'ahv-ipv6', 'ahv-maximum', 'apc-pool', 'ahv-g8-pool', 'ahv-g9-pool', '8Tb-pool', 'AHV-AMD']
+        #pools = ['apc-pool']
+        # pools = ['ahv-host-shared-gpu']
     
     res = []
     for pool in pools:
@@ -81,11 +84,11 @@ async def fetch_nodes_from_api(pools: List[str] = None):
             # print(node.name)
             logger.info(f"NIC Data: {hardware_data}")
             nics_count  = hardware_data.get("nics_count", 0)
-            nic_speed = hardware_data.get("nic_speed",0)
+            nic_speed = hardware_data.get("nic_speed", "")
             gpu_model = hardware_data.get("gpu_model", "")
-            if gpu_model=="":
+            if gpu_model==None:
                 gpu_model = node.gpu_model
-            # print("nc = %s, ns = %s" % (nics_count, nic_speed))
+            logger.info(f"NIC Data: {nics_count},  {nic_speed}, {gpu_model}")
             # continue
             node_data = {
                 "gpu_model": gpu_model,
@@ -100,6 +103,7 @@ async def fetch_nodes_from_api(pools: List[str] = None):
                 "nics_count": nics_count, 
                 "nic_speed": nic_speed
             }
+        
             res.append(node_data)
             
     return res
@@ -119,16 +123,15 @@ async def startup_event():
                 cpu_generation=item.get("cpu_generation", "N/A"),
                 cpu_sockets=item.get("cpu_sockets", 0),
                 host_ip=item.get("host_ip", "0.0.0.0"),
-                gpu_model=item.get("gpu_model"),
+                gpu_model=item.get("gpu_model", ""),
                 pool=item.get("pool", "default"),
                 cpu_model=item.get("cpu_model", "Unknown CPU"),
                 nics_count = item.get("nics_count", 0),
-                nic_speed=  item.get("nic_speed", 0)
-                
+                nic_speed=  item.get("nic_speed", "")
             )
             nodes.append(node)
         except ValidationError as e:
-            print(f"Skipping invalid node: {e}")
+            logger.info(f"Skipping invalid node: {e}")
     
     asyncio.create_task(periodic_update())
 
@@ -191,9 +194,24 @@ async def get_nodes(gpu_model: str = None, min_cpu_cores: int = None,
     
 
 async def get_hardware_info(ip: str) -> dict:
+    cache_file = os.path.join(CACHE_DIR, f"{ip}.json")
+    cache_data = None
+    
+    try:
+        with open(cache_file, 'r') as f:
+            cache = json.load(f)
+            cache_time = cache.get('timestamp', 0)
+            if time.time() - cache_time <= UPDATE_INTERVAL:
+                logger.info(f"Cache found: returning... %s"% cache.get('data', {}))
+                return cache.get('data', {})
+            cache_data = cache.get('data', {})  # Keep expired data for fallback
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.info(f"Cache not found: {e}")
+        pass
+    
     if not ping(ip):
         logger.warning(f"Host {ip} unreachable")
-        return {}
+        return cache_data if cache_data is not None else {}
 
     try:
         async with asyncssh.connect(
@@ -226,20 +244,36 @@ async def get_hardware_info(ip: str) -> dict:
                 result = await conn.run("lspci | grep -i 'vga\|amd\|nvidia'")
                 gpu_model = result.stdout.strip() if result.exit_status == 0 else None
 
-            return {
+            data = {
                 "nics_count": nics_count,
                 "nic_speed": nic_speed,
                 "gpu_model": gpu_model
             }
+            
+            # Update cache
+            logger.info("Updating Cache...")
+            try:
+                os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+                logger.info(f"Cache file: {cache_file}")
+                with open(cache_file, 'w') as f:
+                    json.dump({
+                        'timestamp': time.time(),
+                        'data': data
+                    }, f)
+                    logger.info("Cache written successfully")
+            except Exception as e:
+                logger.error(f"Failed to write cache for {ip}: {e}")
+
+            return data
 
     except asyncssh.misc.PermissionDenied:
         logger.error(f"Authentication failed for {ip}")
         #return {}
-        return {"nics_count": 0, "nic_speed": 0, "gpu_model":""}
+        return cache_data if cache_data else {"nics_count": 0, "nic_speed": "", "gpu_model": ""}
     except Exception as e:
         logger.error(f"SSH failed for {ip}: {e}")
         # return {}
-        return {"nics_count": 0, "nic_speed": 0, "gpu_model":""}
+        return cache_data if cache_data else {"nics_count": 0, "nic_speed": "", "gpu_model": ""}
     
     
 # async def enrich_node_data(base_node: dict) -> Node:

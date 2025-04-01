@@ -6,6 +6,8 @@ services:
     ports:
       - "80:80"
     restart: always
+    volumes:
+      - ./cache:/app/cache
     environment:
       - UPDATE_INTERVAL=${UPDATE_INTERVAL}
       - SSH_USERNAME=${SSH_USERNAME}
