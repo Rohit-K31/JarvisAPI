@@ -18,8 +18,8 @@ import time
 import logging
 
 UPDATE_INTERVAL = config("UPDATE_INTERVAL", default=1500000, cast=int)
-SSH_USERNAME = config("SSH_USERNAME", default="root")
-SSH_PASSWORD = config("SSH_PASSWORD", default="RDMCluster.123")  # Password from environment
+SSH_USERNAME = "root" #config("SSH_USERNAME", default="root")
+SSH_PASSWORD = "RDMCluster.123" #config("SSH_PASSWORD", default="RDMCluster.123")  # Password from environment
 CACHE_DIR = "/app/cache"
 
 # Configure logging
@@ -69,10 +69,9 @@ def safe_int(value, default=0):
         return default
 
 async def fetch_nodes_from_api(pools: List[str] = None):
-    
     if not pools:
-        pools = ['ahv-host-shared', 'ahv-host-shared-gpu', 'ahv-ipv6', 'ahv-maximum', 'apc-pool', 'ahv-g8-pool', 'ahv-g9-pool', '8Tb-pool', 'AHV-AMD']
-        #pools = ['apc-pool']
+        # pools = ['ahv-host-shared', 'ahv-host-shared-gpu', 'ahv-ipv6', 'ahv-maximum', 'apc-pool', 'ahv-g8-pool', 'ahv-g9-pool', '8Tb-pool'] #'AHV-AMD']
+        pools = ['apc-pool', 'AHV-AMD', 'ahv-host-shared']
         # pools = ['ahv-host-shared-gpu']
     
     res = []
@@ -137,7 +136,7 @@ async def startup_event():
 
 async def periodic_update():
     while True:
-        await asyncio.sleep(3000)
+        await asyncio.sleep(300000)
         new_nodes = await fetch_nodes_from_api()
         nodes.clear()
         for item in new_nodes:
