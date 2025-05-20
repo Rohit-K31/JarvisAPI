@@ -1,2 +1,6 @@
-To build and run: docker-compose up -d --build
-To exit: docker-compose down
+To build and run: 
+docker-compose up -d --build
+
+
+To quit: 
+docker-compose down
